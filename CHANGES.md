@@ -30,13 +30,29 @@ decoupled from log-text scraping → sample-dir polling on a timer; `HIDDEN_SETT
 duplicate `weighting_scheme` collapsed to `logit_normal`; dead `blocks_to_swap`
 copy removed from `HIDDEN_SETTINGS`. bf16-only / frozen-adapter / no-fp8 preserved.
 
-**New runtime deps:** the backend needs `fastapi` + `uvicorn` installed into the
-portable `python_embeded` (alongside the existing torch/onnx stack).
+**Frontend landed (chunk 2):** `assets/` — a buildless, fully-offline single page
+in the Forge Studio design language (tokens from Studio's `app.css`, quiet
+uppercase section labels instead of Gradio pills, inline Lucide icons, local
+`@font-face` with system fallback — see `assets/fonts/README.md`). Keyed-settings
+persistence, SSE log console + progress lines, preview gallery via `/preview`,
+the optimizer↔LR coupling (Prodigy=1.0 / AdamW restore), full-FT rank-inert
+toggle, and all four carried-over features (block-swap, prune, full-FT, updater).
 
-**Still to do:** offline frontend (Forge Studio design tokens, bundled fonts +
-Lucide icons), then the layered preset system (LoRA-type recipe × hardware
-constraint). The legacy `app.py` (Gradio) stays in place until the new frontend
-is verified, so nothing breaks mid-rebuild.
+**Layered presets landed (chunk 3):** two axes — **LoRA Type** (Style / Character /
+Concept switchable / Concept dominant) sets the recipe (rank, optimizer, LR, save
+cadence, passes→steps computed from the dataset image count), and **VRAM Preset**
+(6/12/16/24 GB) sits on top as a constraint layer (block-swap, batch, preview res,
+bucket targets, and a `rank_cap`). Rank = `min(type_rank, hardware_cap)` with a
+note when the cap bites. `Custom` on either axis is a no-op. The dropdowns are not
+persisted (reset to Custom on reload); they only drive real fields, which persist
+normally. Resolved server-side via `POST /presets/resolve`.
+
+**Launchers:** `start_studio.bat` runs the new server; legacy `start_trainer.bat`
+(Gradio `app.py`) is left in place. `Install_Requirements.bat` now also installs
+`fastapi` + `uvicorn` into the portable `python_embeded`.
+
+**New runtime deps:** `fastapi` + `uvicorn` (installed by step [4/4] of the
+installer). The legacy `app.py` remains until the new UI is verified on-device.
 
 ---
 

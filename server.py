@@ -199,6 +199,22 @@ async def prune(req: Request):
 
 
 # ==========================================
+# LAYERED PRESETS — resolve the two axes into concrete field updates.
+# The dropdowns themselves are NOT persisted settings; they only drive real fields.
+# ==========================================
+@app.post("/presets/resolve")
+async def presets_resolve(req: Request):
+    body = await _json_body(req)
+    s = core.get_settings()
+    lora_type = body.get("lora_type", "Custom")
+    vram_tier = body.get("vram_tier", "Custom")
+    dataset_path = body.get("dataset_path", s.get("dataset_path", ""))
+    batch = body.get("train_batch_size", s.get("train_batch_size", 1))
+    grad = body.get("gradient_accumulation_steps", s.get("gradient_accumulation_steps", 1))
+    return JSONResponse(core.resolve_presets(lora_type, vram_tier, dataset_path, batch, grad))
+
+
+# ==========================================
 # FOLDER OPEN (local-only)
 # ==========================================
 @app.post("/folder/output")

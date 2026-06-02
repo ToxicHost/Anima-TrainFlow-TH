@@ -1091,3 +1091,112 @@ def kill_process(proc: subprocess.Popen) -> str:
         return "Process already finished."
     except Exception as e:
         return f"Error during stop: {str(e)}"
+
+
+# ==========================================
+# LAYERED PRESET SYSTEM (model C: type = intent, hardware = reality cap)
+# Axis 1 (LoRA Type) sets the RECIPE; axis 2 (Hardware/VRAM) sets the CONSTRAINT.
+# Presets only write values into existing fields — they never lock controls.
+# ==========================================
+LORA_TYPE_PRESETS = {
+    # rank, optimizer, lr (STRING — coupled to optimizer), save_every, passes_per_image, note
+    "Style": dict(
+        rank=32, optimizer="Prodigy", lr="1.0", save=300, passes=130,
+        note="Style: vary subject, keep the look constant. Trigger optional. ~1.8-2.4k steps."),
+    "Character": dict(
+        rank=32, optimizer="AdamW8bit", lr="0.00002", save=250, passes=120,
+        note="Character: prune constant identity tags so the trigger absorbs them; keep clothing/pose/bg tagged."),
+    "Concept (switchable)": dict(
+        rank=32, optimizer="AdamW8bit", lr="0.00002", save=400, passes=140,
+        note="Concept: keep the concept tag present; vary everything else. Trigger on."),
+    "Concept (dominant)": dict(
+        rank=64, optimizer="AdamW8bit", lr="0.00002", save=500, passes=140,
+        note="Dominant concept: triggerless, merge in heavy (~0.9-1.0). Needs a larger dataset (150+)."),
+}
+
+# Hardware constraint layer: sets/overrides hardware knobs + a rank_cap that limits
+# the type's rank. Never touches optimizer/LR/trigger/save.
+VRAM_PRESETS = {
+    # blocks_to_swap, batch, preview px, side_min, side_max, rank_cap
+    "6 GB":  dict(swap=20, batch=1, prev=512,  smin=512, smax=512,  rank_cap=16),
+    "12 GB": dict(swap=8,  batch=1, prev=768,  smin=512, smax=768,  rank_cap=32),
+    "16 GB": dict(swap=0,  batch=1, prev=1024, smin=768, smax=1024, rank_cap=64),
+    "24 GB": dict(swap=0,  batch=2, prev=1024, smin=768, smax=1024, rank_cap=128),
+}
+
+PRESET_CAVEATS = [
+    "Presets are starting points — tune block-swap if you OOM or it's slow; adjust steps if needed.",
+    "Bucket targets only take effect after re-running Smart Aspect Ratio Bucketing.",
+    "Full fine-tune is independent — if it's on, the LoRA rank is irrelevant; raise block-swap manually for full-FT VRAM.",
+]
+
+
+def compute_steps(passes_per_image: int, img_count: int, batch: int, grad_acc: int) -> int:
+    effective_batch = max(1, int(batch) * int(grad_acc))
+    raw = passes_per_image * img_count
+    return max(64, round(raw / effective_batch / 64) * 64)
+
+
+def resolve_presets(lora_type: str, vram_tier: str, dataset_path: str, batch, grad_acc) -> Dict:
+    """Resolve the two-axis layered presets into concrete field updates.
+
+    Recipe knobs (optimizer/lr/save/passes->steps) come from the LoRA-Type preset;
+    hardware knobs (blocks_to_swap/batch/preview/buckets) from the VRAM preset;
+    rank = min(type_rank, hardware_rank_cap). Either axis being 'Custom' contributes
+    nothing. Returns {updates, info, notes, caveats}."""
+    updates: Dict = {}
+    info: List[str] = []
+    notes: List[str] = []
+
+    t = LORA_TYPE_PRESETS.get(lora_type)
+    v = VRAM_PRESETS.get(vram_tier)
+
+    # Recipe knobs from the type preset only.
+    type_rank = None
+    if t:
+        updates["optimizer"] = t["optimizer"]
+        updates["learning_rate"] = t["lr"]
+        updates["save_steps"] = t["save"]
+        type_rank = t["rank"]
+        info.append(t["note"])
+
+    # Hardware knobs from the VRAM preset only.
+    cap = None
+    eff_batch = batch
+    if v:
+        updates["blocks_to_swap"] = v["swap"]
+        updates["train_batch_size"] = v["batch"]
+        updates["width"] = v["prev"]
+        updates["height"] = v["prev"]
+        updates["side_min"] = v["smin"]
+        updates["side_max"] = v["smax"]
+        cap = v["rank_cap"]
+        eff_batch = v["batch"]   # the override drives the steps math below
+
+    # Rank is the one shared knob: min(type_rank, cap).
+    if type_rank is not None:
+        if cap is not None:
+            final_rank = min(type_rank, cap)
+            updates["network_rank"] = final_rank
+            if final_rank < type_rank:
+                notes.append(f"Rank capped to {cap} for {vram_tier} — {lora_type} normally prefers {type_rank}.")
+        else:
+            updates["network_rank"] = type_rank
+
+    # Steps from image count (only when a type is selected — passes come from type).
+    if t:
+        img_count = count_images(dataset_path)
+        if img_count > 0:
+            try:
+                b = int(eff_batch if eff_batch is not None else 1)
+            except (TypeError, ValueError):
+                b = 1
+            try:
+                g = int(grad_acc or 1)
+            except (TypeError, ValueError):
+                g = 1
+            updates["training_steps"] = compute_steps(t["passes"], img_count, b, g)
+        else:
+            notes.append("Set a dataset path to auto-compute steps.")
+
+    return {"updates": updates, "info": info, "notes": notes, "caveats": PRESET_CAVEATS}
