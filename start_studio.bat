@@ -3,6 +3,7 @@ setlocal
 cd /d %~dp0
 
 set "PY_EXE=%~dp0python_embeded\python.exe"
+set "PYTHONPATH=%~dp0;%PYTHONPATH%"
 
 if not exist "%PY_EXE%" (
     echo [ERROR] Portable Python not found at:

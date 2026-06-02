@@ -9,10 +9,17 @@ trainer_core.py and knows nothing about the process or the framework.
 """
 
 import json
+import os
+import sys
 import threading
 import webbrowser
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional
+
+# The portable python_embeded (._pth config) does not auto-add the script's own
+# directory to sys.path, so a sibling import of trainer_core fails. Make this
+# entry point self-locating regardless of how it's launched.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
