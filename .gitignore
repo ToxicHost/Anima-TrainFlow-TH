@@ -1,0 +1,24 @@
+# Portable runtime (large; provided by the distribution, not source)
+python_embeded/
+
+# Model weights / binaries
+models/anima/
+models/u2net/*.onnx
+models/wd-eva02-large-tagger-v3/*.onnx
+*.safetensors
+*.ckpt
+*.pt
+
+# Training outputs & caches
+training/output/
+latent_cache/
+cache_text_encoder/
+**/*.npz
+
+# Per-user state
+training/settings.json
+settings.json
+
+# Python
+__pycache__/
+*.pyc
