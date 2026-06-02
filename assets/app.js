@@ -20,7 +20,6 @@ document.querySelectorAll('[data-icon]').forEach(b => { b.innerHTML = svg(b.data
 // ---- helpers ----
 const $ = sel => document.querySelector(sel);
 const byKey = k => document.querySelector(`[data-key="${k}"]`);
-const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 let savedAdamLr = '0.00005';
 let running = false;
 
@@ -148,47 +147,11 @@ $('#full-ft').addEventListener('change', () => { syncFullFt(); persistNow(); });
 function syncSwapOut() { $('#swap-out').textContent = $('#swap').value; }
 $('#swap').addEventListener('input', syncSwapOut);
 
-// ---- layered presets ----
-function presetsActive() { return $('#lora-type').value !== 'Custom' || $('#vram-preset').value !== 'Custom'; }
-async function resolvePresets() {
-  const body = {
-    lora_type: $('#lora-type').value,
-    vram_tier: $('#vram-preset').value,
-    dataset_path: byKey('dataset_path').value,
-    train_batch_size: Number(byKey('train_batch_size').value || 1),
-    gradient_accumulation_steps: Number(byKey('gradient_accumulation_steps').value || 1),
-  };
-  const r = await fetch('/presets/resolve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json());
-  applyUpdates(r.updates || {});
-  fillPresetInfo(r);
-}
-function applyUpdates(u) {
-  Object.entries(u).forEach(([k, v]) => {
-    const el = byKey(k);
-    if (!el) return;
-    if (el.type === 'checkbox') el.checked = !!v; else el.value = v;
-  });
-  if ('blocks_to_swap' in u) syncSwapOut();
-  if (u.optimizer && u.optimizer !== 'Prodigy' && 'learning_rate' in u) savedAdamLr = String(u.learning_rate);
-  persistNow();
-}
-function fillPresetInfo(r) {
-  if (!presetsActive()) { $('#preset-info').innerHTML = ''; return; }
-  const parts = [];
-  (r.info || []).forEach(t => parts.push(`<div>${esc(t)}</div>`));
-  (r.notes || []).forEach(t => parts.push(`<div class="note">${esc(t)}</div>`));
-  (r.caveats || []).forEach(t => parts.push(`<div class="caveat">${esc(t)}</div>`));
-  $('#preset-info').innerHTML = parts.join('');
-}
-$('#lora-type').addEventListener('change', resolvePresets);
-$('#vram-preset').addEventListener('change', resolvePresets);
-
-// ---- generic persistence + dataset-driven step recompute ----
+// ---- generic persistence (all fields are manual) ----
 document.querySelectorAll('[data-key]').forEach(el => {
   el.addEventListener('input', persist);
   el.addEventListener('change', persist);
 });
-byKey('dataset_path').addEventListener('change', () => { if ($('#lora-type').value !== 'Custom') resolvePresets(); });
 
 // ---- init ----
 (async function init() {
@@ -198,7 +161,5 @@ byKey('dataset_path').addEventListener('change', () => { if ($('#lora-type').val
     if (s.optimizer && s.optimizer !== 'Prodigy' && s.learning_rate !== '1.0') savedAdamLr = String(s.learning_rate);
   } catch (e) { logLine('Could not load settings: ' + e, 'err'); }
   syncSwapOut(); syncFullFt();
-  // Preset dropdowns are NOT persisted — they always start at Custom.
-  $('#lora-type').value = 'Custom'; $('#vram-preset').value = 'Custom';
   fetch('/update/check', { method: 'POST' }).then(r => r.json()).then(r => { $('#version').textContent = 'v' + (r.current || '—'); }).catch(() => {});
 })();
