@@ -1,0 +1,143 @@
+/* Studio Trainer — Forge Studio design language. Offline; tokens match Studio's app.css. */
+:root {
+  --bg-void: #0e0e11; --bg-surface: #161619; --bg-raised: #1c1c20; --bg-input: #111114;
+  --border: #2a2a30; --border-subtle: #222226; --border-hover: #3a3a42;
+  --text-1: #e0dfd8; --text-2: #c2bfb5; --text-3: #8b8b93; --text-4: #5a5a62;
+  --accent: #7b8fff; --accent-dim: #7b8fff22; --accent-mid: #7b8fff44; --accent-bright: #9aabff;
+  --pink: #d4537e; --pink-dim: #d4537e22;
+  --green: #5dca85; --green-dim: #5dca8522;
+  --amber: #efaa27; --amber-dim: #efaa2722;
+  --red: #e24b4a; --red-dim: #e24b4a22;
+  --radius: 8px; --radius-sm: 5px; --radius-lg: 12px;
+  --font: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  --mono: 'JetBrains Mono', 'Fira Code', monospace;
+  --ui-font: 12px; --ui-font-small: 11px; --ui-font-meta: 10px;
+  --control-h: 30px; --control-h-sm: 28px; --control-gap: 6px; --section-pad: 12px;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; }
+body {
+  background: var(--bg-void); color: var(--text-1);
+  font: var(--ui-font)/1.4 var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---- Fonts (bundled locally; see assets/fonts/README.md) ---- */
+@font-face { font-family: 'DM Sans'; font-weight: 300; font-display: swap; src: local('DM Sans'), url('fonts/DMSans-Light.woff2') format('woff2'); }
+@font-face { font-family: 'DM Sans'; font-weight: 400; font-display: swap; src: local('DM Sans'), url('fonts/DMSans-Regular.woff2') format('woff2'); }
+@font-face { font-family: 'DM Sans'; font-weight: 500; font-display: swap; src: local('DM Sans'), url('fonts/DMSans-Medium.woff2') format('woff2'); }
+@font-face { font-family: 'DM Sans'; font-weight: 600; font-display: swap; src: local('DM Sans'), url('fonts/DMSans-SemiBold.woff2') format('woff2'); }
+@font-face { font-family: 'JetBrains Mono'; font-weight: 400; font-display: swap; src: local('JetBrains Mono'), url('fonts/JetBrainsMono-Regular.woff2') format('woff2'); }
+@font-face { font-family: 'JetBrains Mono'; font-weight: 500; font-display: swap; src: local('JetBrains Mono'), url('fonts/JetBrainsMono-Medium.woff2') format('woff2'); }
+
+/* ---- Layout ---- */
+header {
+  display: flex; align-items: baseline; gap: 12px;
+  padding: 12px 18px; border-bottom: 1px solid var(--border); background: var(--bg-surface);
+}
+header h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: 0.2px; }
+header .version { font: var(--ui-font-meta) var(--mono); color: var(--text-4); }
+header .about { margin-left: auto; font-size: var(--ui-font-meta); color: var(--text-4); }
+
+main { padding: 14px; display: flex; flex-direction: column; gap: 14px; max-width: 1500px; margin: 0 auto; }
+.row { display: flex; gap: 14px; align-items: stretch; }
+.row > .panel { flex: 1; min-width: 0; }
+@media (max-width: 980px) { .row { flex-direction: column; } }
+
+.panel {
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: var(--section-pad); display: flex; flex-direction: column; gap: 10px;
+}
+.group { background: var(--bg-raised); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+
+/* ---- Section labels: quiet uppercase (no purple pills) ---- */
+.label { font-size: var(--ui-font-small); color: var(--text-3); font-weight: 600; letter-spacing: 0.8px; text-transform: uppercase; }
+
+/* ---- Fields ---- */
+.field { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.field > span { font-size: var(--ui-font-meta); color: var(--text-3); letter-spacing: 0.3px; }
+.fields { display: flex; gap: var(--control-gap); flex-wrap: wrap; }
+
+input[type=text], input[type=number], select, textarea {
+  background: var(--bg-input); color: var(--text-1);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 6px 8px; font: var(--ui-font-small) var(--font);
+  height: var(--control-h); width: 100%;
+  transition: border-color 0.15s;
+}
+textarea { height: auto; resize: vertical; min-height: 54px; font-family: var(--font); }
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+input:disabled, select:disabled { opacity: 0.45; cursor: not-allowed; }
+input[type=number] { font-family: var(--mono); }
+
+label.check { display: flex; align-items: center; gap: 6px; font-size: var(--ui-font-small); color: var(--text-2); height: var(--control-h); }
+input[type=checkbox] { accent-color: var(--accent); width: 14px; height: 14px; }
+
+input[type=range] { width: 100%; accent-color: var(--accent); height: var(--control-h); }
+.range-row { display: flex; align-items: center; gap: 8px; }
+.range-row output { font: var(--ui-font-small) var(--mono); color: var(--text-2); min-width: 22px; text-align: right; }
+
+/* ---- Buttons ---- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: var(--control-h); padding: 0 12px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--bg-raised); color: var(--text-2);
+  font: 500 var(--ui-font-small) var(--font); cursor: pointer; transition: all 0.12s;
+  white-space: nowrap;
+}
+.btn:hover { color: var(--text-1); border-color: var(--border-hover); }
+.btn .icon { width: 14px; height: 14px; }
+.btn.primary { background: var(--accent-dim); border-color: var(--accent-mid); color: var(--accent-bright); }
+.btn.primary:hover { background: var(--accent-mid); }
+.btn.danger { color: var(--red); border-color: var(--red-dim); }
+.btn.danger:hover { background: var(--red-dim); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-row { display: flex; gap: var(--control-gap); flex-wrap: wrap; }
+
+.icon-btn {
+  width: var(--control-h); height: var(--control-h); border-radius: 6px;
+  background: none; border: 1px solid transparent; color: var(--text-3);
+  display: inline-flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.12s;
+}
+.icon-btn:hover { color: var(--text-1); border-color: var(--border-hover); }
+.icon-btn .icon { width: 16px; height: 16px; }
+
+/* ---- Accordion ---- */
+details.acc { border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-raised); }
+details.acc > summary { cursor: pointer; padding: 7px 10px; font-size: var(--ui-font-small); color: var(--text-3); list-style: none; }
+details.acc > summary::-webkit-details-marker { display: none; }
+details.acc[open] > summary { border-bottom: 1px solid var(--border-subtle); }
+details.acc .acc-body { padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+
+/* ---- Log console (mono) ---- */
+.console {
+  font: 12px/1.35 var(--mono); background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 10px; height: 320px; overflow-y: auto;
+  white-space: pre-wrap; word-break: break-word; color: var(--text-2);
+}
+.console .err { color: var(--red); }
+.console .ok { color: var(--green); }
+.console .warn { color: var(--amber); }
+.console .prog { color: var(--accent-bright); }
+
+/* ---- Preview gallery ---- */
+.gallery { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; min-height: 200px; }
+.gallery img { width: 100%; border-radius: var(--radius-sm); border: 1px solid var(--border); object-fit: contain; background: var(--bg-input); }
+.gallery .empty { grid-column: 1 / -1; color: var(--text-4); font-size: var(--ui-font-small); text-align: center; padding: 40px 0; }
+
+/* ---- Info lines ---- */
+.info { font-size: var(--ui-font-meta); color: var(--text-3); line-height: 1.5; }
+.info .note { color: var(--amber); }
+.info .caveat { color: var(--text-4); }
+.meta { font: var(--ui-font-meta) var(--mono); color: var(--text-4); }
+
+/* ---- Scrollbars ---- */
+*::-webkit-scrollbar { width: 6px; height: 6px; }
+*::-webkit-scrollbar-track { background: rgba(0,0,0,0.1); }
+*::-webkit-scrollbar-thumb { background: var(--border-hover); border-radius: 10px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+}

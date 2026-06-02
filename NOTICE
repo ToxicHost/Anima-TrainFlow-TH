@@ -1,0 +1,11 @@
+Studio Trainer
+A local LoRA / full fine-tune trainer for the Anima 2B image model.
+
+This project is a fork of Anima TrainFlow, originally created by ThetaCursed
+(https://github.com/ThetaCursed/Anima-TrainFlow) and distributed under the MIT
+License. The original copyright and MIT license terms are retained in LICENSE.
+
+Credit for the original Anima TrainFlow application and its training engine
+goes to ThetaCursed. This fork (ToxicHost/Anima-TrainFlow-TH) adds block-swap
+exposure, caption tag-pruning, a full fine-tune toggle, an in-app updater, a
+layered preset system, and a FastAPI + offline frontend rebuild of the UI.

@@ -116,6 +116,9 @@ TRAIN_SCRIPT_FULL = TRAIN_DIR / "anima_train.py"
 # Block-swap is capped at num_blocks - 2 (28 - 2 = 26) by anima_models.enable_block_swap().
 MAX_BLOCKS_TO_SWAP = 26
 
+VERSION = "1.3.0"   # bump on each release; used by the updater's up-to-date check
+RAW_APP_URL = "https://raw.githubusercontent.com/ToxicHost/Anima-TrainFlow-TH/main/app.py"
+
 training_process = None
 
 for d in [TRAIN_BASE, OUTPUT_BASE]:
@@ -841,6 +844,83 @@ def run_prune_tags(dataset_dir, prune_tags, current_logs):
     yield "\n".join(log_lines)
 
 
+# VRAM preset starting points (LoRA path). Convenience only: each preset populates
+# existing controls; it adds no new training parameters and changes no defaults.
+VRAM_PRESETS = {
+    # rank, blocks_to_swap, batch, preview WxH, crop side_min/max
+    "6 GB":  dict(rank=16, swap=20, batch=1, prev=512,  smin=512, smax=512),
+    "12 GB": dict(rank=32, swap=8,  batch=1, prev=768,  smin=512, smax=768),
+    "16 GB": dict(rank=32, swap=0,  batch=1, prev=1024, smin=768, smax=1024),
+    "24 GB": dict(rank=64, swap=0,  batch=2, prev=1024, smin=768, smax=1024),
+}
+
+
+def apply_vram_preset(preset):
+    # Order MUST match the outputs=[...] list in the .change wiring below.
+    if preset == "Custom" or preset not in VRAM_PRESETS:
+        return [gr.update()] * 7 + [gr.update(value="")]
+    p = VRAM_PRESETS[preset]
+    info = (
+        f"**{preset} applied** — rank {p['rank']}, block-swap {p['swap']}, batch {p['batch']}, "
+        f"preview {p['prev']}px, buckets {p['smin']}–{p['smax']}. "
+        f"*Starting point — raise block-swap if you hit OOM, lower it if training is too slow. "
+        f"Re-run **Smart Aspect Ratio Bucketing** for the resolution targets to take effect.*"
+    )
+    return [
+        gr.update(value=p["rank"]),
+        gr.update(value=p["swap"]),
+        gr.update(value=p["batch"]),
+        gr.update(value=p["prev"]),   # width (preview)
+        gr.update(value=p["prev"]),   # height (preview)
+        gr.update(value=p["smin"]),   # crop side_min
+        gr.update(value=p["smax"]),   # crop side_max
+        gr.update(value=info),
+    ]
+
+
+def check_for_updates(current_logs):
+    log_lines = current_logs.split('\n') if current_logs else []
+    try:
+        import urllib.request, tempfile
+        log_lines.append("🔄 Checking for updates...")
+        yield "\n".join(log_lines)
+
+        # 1. Download the latest app.py from main into memory.
+        with urllib.request.urlopen(RAW_APP_URL, timeout=20) as resp:
+            new_code = resp.read().decode("utf-8")
+
+        # 2. Sanity-validate the payload before trusting it. On any doubt, change nothing.
+        if len(new_code) < 1000 or "def start_training" not in new_code:
+            log_lines.append("❌ Update check failed: downloaded file looks invalid. No changes made.")
+            yield "\n".join(log_lines)
+            return
+
+        # 3. Compare versions (best-effort).
+        m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', new_code)
+        remote_ver = m.group(1) if m else "unknown"
+        if remote_ver == VERSION:
+            log_lines.append(f"✅ You're up to date (v{VERSION}).")
+            yield "\n".join(log_lines)
+            return
+
+        # 4. Back up the current app.py, then atomically swap in the new one via a temp file.
+        app_path = Path(__file__).resolve()
+        backup_path = app_path.with_suffix(".py.bak")
+        shutil.copy2(str(app_path), str(backup_path))
+
+        fd, tmp = tempfile.mkstemp(suffix=".py", dir=str(app_path.parent))
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(new_code)
+        os.replace(tmp, str(app_path))   # atomic swap on the same filesystem
+
+        log_lines.append(f"✅ Update downloaded: v{VERSION} → v{remote_ver}.")
+        log_lines.append("🔁 Restart TrainFlow to apply. (Previous version saved as app.py.bak)")
+        yield "\n".join(log_lines)
+    except Exception as e:
+        log_lines.append(f"❌ Update check failed: {e}. No changes made.")
+        yield "\n".join(log_lines)
+
+
 def open_dataset_folder_ui(dataset_dir, current_logs):
     log_lines = current_logs.split('\n') if current_logs else []
     if not dataset_dir or not os.path.exists(dataset_dir):
@@ -1112,6 +1192,9 @@ with gr.Blocks(title="Anima TrainFlow: Easy LoRA Trainer for Anima 2B") as ui:
                 with gr.Row():
                     blocks_to_swap_input = gr.Slider(0, MAX_BLOCKS_TO_SWAP, value=cs.get("blocks_to_swap", 0), step=1, label="Blocks to Swap (0 = off)")
                     full_finetune_input = gr.Checkbox(label="Full Fine-tune (no LoRA)", value=cs.get("full_finetune", False))
+                with gr.Row():
+                    vram_preset = gr.Dropdown(label="VRAM Preset", choices=["Custom", "6 GB", "12 GB", "16 GB", "24 GB"], value="Custom")
+                preset_info = gr.Markdown("")
 
     with gr.Row():
         with gr.Column(scale=1):
@@ -1141,6 +1224,11 @@ with gr.Blocks(title="Anima TrainFlow: Easy LoRA Trainer for Anima 2B") as ui:
                 gr.Markdown("### Prune Tags")
                 prune_tags_box = gr.Textbox(label="Tags to remove (comma-separated)", value=cs.get("prune_tags", ""), placeholder="e.g., white hair, yellow eyes, undercut")
                 prune_btn = gr.Button("Strip Tags from Captions", variant="secondary")
+
+            # --- UPDATER ---
+            with gr.Row():
+                update_btn = gr.Button("🔄 Check for Updates", variant="secondary")
+            gr.Markdown(f"Anima TrainFlow-TH · v{VERSION}")
 
 
         with gr.Column(scale=1):
@@ -1208,6 +1296,16 @@ with gr.Blocks(title="Anima TrainFlow: Easy LoRA Trainer for Anima 2B") as ui:
     def toggle_full_ft(is_full):
         return gr.update(interactive=not is_full)
     full_finetune_input.change(fn=toggle_full_ft, inputs=[full_finetune_input], outputs=[rank_input])
+
+    # VRAM preset: populate existing controls (their own .change handlers persist the values).
+    vram_preset.change(
+        fn=apply_vram_preset,
+        inputs=[vram_preset],
+        outputs=[rank_input, blocks_to_swap_input, batch_size_input,
+                 width_input, height_input, side_min_input, side_max_input, preset_info]
+    )
+
+    update_btn.click(fn=check_for_updates, inputs=[output_log], outputs=[output_log])
 
 
     start_btn.click(fn=start_training, inputs=training_inputs, outputs=[output_log, preview_gallery])

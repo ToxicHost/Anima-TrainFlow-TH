@@ -1,6 +1,62 @@
 # Modifications
 
 This is an MIT-licensed fork of [ThetaCursed/Anima-TrainFlow](https://github.com/ThetaCursed/Anima-TrainFlow).
+The original LICENSE is preserved and attribution to ThetaCursed is retained (see `NOTICE`).
+
+## De-Gradio rebuild → "Studio Trainer" (in progress)
+
+Replacing the single-file Gradio app with a FastAPI backend + offline custom
+frontend. The training engine was already decoupled from the UI by a subprocess
+boundary, so this is a presentation-layer swap, not a trainer rewrite.
+
+**Backend landed (this chunk):**
+- `trainer_core.py` — framework-free engine (no gradio/fastapi). Config builders,
+  `SmartCropper`/`WDTagger` ONNX preprocessing (unchanged), dataset analysis,
+  keyed settings load/save, and the training orchestration split into
+  `build_launch()` / `tail_process()` / `kill_process()` so the server owns the
+  process. Dataset tools (`run_smart_crop`/`run_auto_tagging`/`run_prune_tags`)
+  refactored to emit structured events (`{type: log|progress|preview|done|error}`)
+  instead of re-yielding a whole log buffer.
+- `server.py` — FastAPI layer + `TrainingManager` (single-run **409 lock**,
+  `stop_requested` flag, rolling stdout tail, terminal **done/error**
+  classification). SSE streams for train/bucket/tag/prune; REST for
+  settings/stop/folders; `/preview` with an `is_relative_to(OUTPUT_BASE)`
+  traversal guard; `/update/check` + `/update/apply`; uvicorn entrypoint that
+  opens the browser.
+
+**Traps fixed (not reproduced):** positional settings sync → keyed JSON payload;
+`gr.update()` preview sentinel → structured `preview` events; preview surfacing
+decoupled from log-text scraping → sample-dir polling on a timer; `HIDDEN_SETTINGS`
+duplicate `weighting_scheme` collapsed to `logit_normal`; dead `blocks_to_swap`
+copy removed from `HIDDEN_SETTINGS`. bf16-only / frozen-adapter / no-fp8 preserved.
+
+**Frontend landed (chunk 2):** `assets/` — a buildless, fully-offline single page
+in the Forge Studio design language (tokens from Studio's `app.css`, quiet
+uppercase section labels instead of Gradio pills, inline Lucide icons, local
+`@font-face` with system fallback — see `assets/fonts/README.md`). Keyed-settings
+persistence, SSE log console + progress lines, preview gallery via `/preview`,
+the optimizer↔LR coupling (Prodigy=1.0 / AdamW restore), full-FT rank-inert
+toggle, and all four carried-over features (block-swap, prune, full-FT, updater).
+
+**Layered presets landed (chunk 3):** two axes — **LoRA Type** (Style / Character /
+Concept switchable / Concept dominant) sets the recipe (rank, optimizer, LR, save
+cadence, passes→steps computed from the dataset image count), and **VRAM Preset**
+(6/12/16/24 GB) sits on top as a constraint layer (block-swap, batch, preview res,
+bucket targets, and a `rank_cap`). Rank = `min(type_rank, hardware_cap)` with a
+note when the cap bites. `Custom` on either axis is a no-op. The dropdowns are not
+persisted (reset to Custom on reload); they only drive real fields, which persist
+normally. Resolved server-side via `POST /presets/resolve`.
+
+**Launchers:** `start_studio.bat` runs the new server; legacy `start_trainer.bat`
+(Gradio `app.py`) is left in place. `Install_Requirements.bat` now also installs
+`fastapi` + `uvicorn` into the portable `python_embeded`.
+
+**New runtime deps:** `fastapi` + `uvicorn` (installed by step [4/4] of the
+installer). The legacy `app.py` remains until the new UI is verified on-device.
+
+---
+
+## Pre-rebuild fork features (carried into the port)
 The original LICENSE and in-app attribution ("Created by ThetaCursed") are preserved.
 
 The changes below surface training capabilities that already exist in the bundled
@@ -42,6 +98,28 @@ reproduces upstream behavior exactly.**
   `llm_adapter_lr=0.0`).
 - **No fp8-DiT training** option added.
 - Block-swap capped at 26 (`num_blocks - 2`).
+
+## VRAM Preset selector
+- Added a **"VRAM Preset"** dropdown (Custom / 6 GB / 12 GB / 16 GB / 24 GB). Selecting a card
+  populates existing controls — Network Rank, Blocks to Swap, Batch Size, preview width/height,
+  and the bucketing crop targets — with per-card starting points. **"Custom" is a no-op**, so it
+  changes nothing by default.
+- It is a pure convenience: it only drives controls that already exist and are already persisted
+  (no new training parameters, no change to defaults). The preset itself is not persisted; on
+  reload it shows "Custom" while the underlying values persist.
+- Two caveats are shown in the info line: block-swap values are starting points (raise on OOM,
+  lower if too slow), and the resolution targets only take effect after re-running **Smart Aspect
+  Ratio Bucketing**. Presets target the LoRA path; with Full Fine-tune on, raise block-swap
+  manually (full-FT needs far more VRAM).
+
+## In-App Updater
+- Added a **"Check for Updates"** button that fetches the latest `app.py` from the `main` branch.
+- It downloads to memory, validates the payload, compares versions, backs up the current file to
+  `app.py.bak`, then atomically swaps in the new file via a temp file. It prompts the user to
+  **restart** to apply (a running app cannot hot-swap its own code).
+- It touches **only** `app.py` / `app.py.bak` / a temp file in the app directory — never
+  `settings.json`, models, the runtime, datasets, or training output. On any download/validation
+  failure the current `app.py` is left completely untouched.
 
 ## Repo hygiene
 - Added a root `.gitignore` covering the portable runtime, model weights, training
