@@ -1,0 +1,14 @@
+{
+  "version_note": "Files the in-app updater syncs from main. Add new app files here so the updater covers them. Never list user data, models, the runtime, settings.json, or font binaries.",
+  "files": [
+    "trainer_core.py",
+    "server.py",
+    "assets/index.html",
+    "assets/app.css",
+    "assets/app.js",
+    "start_studio.bat",
+    "start_trainer.bat",
+    "Install_Requirements.bat",
+    "app.py"
+  ]
+}

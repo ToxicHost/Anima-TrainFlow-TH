@@ -42,7 +42,7 @@ import torch
 # ==========================================
 # CONSTANTS
 # ==========================================
-VERSION = "2.0.0"   # bump on each release; drives the updater's up-to-date check
+VERSION = "2.2.0"   # bump on EVERY distributed change; drives the updater's up-to-date check
 
 ROOT = Path(__file__).resolve().parent
 PORTABLE_PYTHON = ROOT / "python_embeded" / "python.exe"
