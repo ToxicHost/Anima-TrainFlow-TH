@@ -1,6 +1,46 @@
 # Modifications
 
 This is an MIT-licensed fork of [ThetaCursed/Anima-TrainFlow](https://github.com/ThetaCursed/Anima-TrainFlow).
+The original LICENSE is preserved and attribution to ThetaCursed is retained (see `NOTICE`).
+
+## De-Gradio rebuild → "Studio Trainer" (in progress)
+
+Replacing the single-file Gradio app with a FastAPI backend + offline custom
+frontend. The training engine was already decoupled from the UI by a subprocess
+boundary, so this is a presentation-layer swap, not a trainer rewrite.
+
+**Backend landed (this chunk):**
+- `trainer_core.py` — framework-free engine (no gradio/fastapi). Config builders,
+  `SmartCropper`/`WDTagger` ONNX preprocessing (unchanged), dataset analysis,
+  keyed settings load/save, and the training orchestration split into
+  `build_launch()` / `tail_process()` / `kill_process()` so the server owns the
+  process. Dataset tools (`run_smart_crop`/`run_auto_tagging`/`run_prune_tags`)
+  refactored to emit structured events (`{type: log|progress|preview|done|error}`)
+  instead of re-yielding a whole log buffer.
+- `server.py` — FastAPI layer + `TrainingManager` (single-run **409 lock**,
+  `stop_requested` flag, rolling stdout tail, terminal **done/error**
+  classification). SSE streams for train/bucket/tag/prune; REST for
+  settings/stop/folders; `/preview` with an `is_relative_to(OUTPUT_BASE)`
+  traversal guard; `/update/check` + `/update/apply`; uvicorn entrypoint that
+  opens the browser.
+
+**Traps fixed (not reproduced):** positional settings sync → keyed JSON payload;
+`gr.update()` preview sentinel → structured `preview` events; preview surfacing
+decoupled from log-text scraping → sample-dir polling on a timer; `HIDDEN_SETTINGS`
+duplicate `weighting_scheme` collapsed to `logit_normal`; dead `blocks_to_swap`
+copy removed from `HIDDEN_SETTINGS`. bf16-only / frozen-adapter / no-fp8 preserved.
+
+**New runtime deps:** the backend needs `fastapi` + `uvicorn` installed into the
+portable `python_embeded` (alongside the existing torch/onnx stack).
+
+**Still to do:** offline frontend (Forge Studio design tokens, bundled fonts +
+Lucide icons), then the layered preset system (LoRA-type recipe × hardware
+constraint). The legacy `app.py` (Gradio) stays in place until the new frontend
+is verified, so nothing breaks mid-rebuild.
+
+---
+
+## Pre-rebuild fork features (carried into the port)
 The original LICENSE and in-app attribution ("Created by ThetaCursed") are preserved.
 
 The changes below surface training capabilities that already exist in the bundled
