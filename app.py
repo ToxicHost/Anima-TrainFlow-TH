@@ -109,8 +109,12 @@ TRAIN_BASE = ROOT / "training"
 OUTPUT_BASE = TRAIN_BASE / "output"
 SETTINGS_FILE = TRAIN_BASE / "settings.json"
 
-TRAIN_DIR = TRAIN_BASE / "sd-scripts" 
+TRAIN_DIR = TRAIN_BASE / "sd-scripts"
 TRAIN_SCRIPT = TRAIN_DIR / "anima_train_network.py"
+TRAIN_SCRIPT_FULL = TRAIN_DIR / "anima_train.py"
+
+# Block-swap is capped at num_blocks - 2 (28 - 2 = 26) by anima_models.enable_block_swap().
+MAX_BLOCKS_TO_SWAP = 26
 
 training_process = None
 
@@ -140,11 +144,14 @@ DEFAULT_SETTINGS = {
     "train_seed": 42,
     "train_batch_size": 1,
     "gradient_accumulation_steps": 1,
+    "blocks_to_swap": 0,
+    "full_finetune": False,
     "side_min": 512,
     "side_max": 768,
     "tagger_gen_thresh": 0.35,
     "tagger_char_thresh": 0.85,
-    "tagger_overwrite": False
+    "tagger_overwrite": False,
+    "prune_tags": ""
 }
 def load_settings():
     settings = DEFAULT_SETTINGS.copy()
@@ -271,7 +278,7 @@ def create_dataset_toml(project_name, dataset_path, trigger_word, base_res, max_
         toml.dump(dataset_config, f)
     return str(config_path)
 
-def create_training_toml(project_name, config_save_dir, actual_output_dir, rank, lr, optimizer, max_steps, save_steps, sample_steps, models, prompt_path, train_seed, batch_size, grad_acc):
+def create_training_toml(project_name, config_save_dir, actual_output_dir, rank, lr, optimizer, max_steps, save_steps, sample_steps, models, prompt_path, train_seed, batch_size, grad_acc, blocks_to_swap=0):
     config_path = config_save_dir / f"{project_name}_training.toml"
 
     network_rank = int(rank)
@@ -324,6 +331,68 @@ def create_training_toml(project_name, config_save_dir, actual_output_dir, rank,
         "vae_disable_cache": True,
         "seed": int(train_seed),
     }
+    # Only write blocks_to_swap when enabled, so the default config stays byte-identical to upstream.
+    if int(blocks_to_swap) > 0:
+        training_config["blocks_to_swap"] = int(blocks_to_swap)
+    with open(config_path, "w", encoding="utf-8") as f: toml.dump(training_config, f)
+    return str(config_path)
+
+
+def create_full_finetune_toml(project_name, config_save_dir, actual_output_dir, lr, optimizer, max_steps, save_steps, sample_steps, models, prompt_path, train_seed, batch_size, grad_acc, blocks_to_swap=0):
+    """Build the config for the full DiT fine-tune trainer (anima_train.py).
+
+    This uses the SAME shared train_util / anima arguments as the LoRA trainer,
+    MINUS every network_* key (anima_train.py has no LoRA network). The LLM adapter
+    is explicitly frozen (llm_adapter_lr=0.0) per the Anima training constraints.
+    """
+    config_path = config_save_dir / f"{project_name}_training.toml"
+
+    opt_args = ["weight_decay=0.01"]
+    if optimizer == "Prodigy":
+        scheduler = "constant"
+        opt_args = ["decouple=True", "weight_decay=0.01", "d_coef=1.0", "use_bias_correction=True", "safeguard_warmup=True", "betas=0.9,0.99"]
+    else:
+        scheduler = "cosine"
+
+    training_config = {
+        "pretrained_model_name_or_path": Path(models["dit_path"]).resolve().as_posix(),
+        "qwen3": Path(models["qwen_path"]).resolve().as_posix(),
+        "vae": Path(models["vae_path"]).resolve().as_posix(),
+        "llm_adapter_lr": 0.0,  # HARD CONSTRAINT: keep the LLM adapter frozen.
+        "gradient_checkpointing": HIDDEN_SETTINGS["gradient_checkpointing"],
+        "max_grad_norm": 1.0,
+        "learning_rate": float(lr),
+        "optimizer_type": optimizer,
+        "optimizer_args": opt_args,
+        "lr_scheduler": scheduler,
+        "max_train_steps": int(max_steps),
+        "train_batch_size": int(batch_size),
+        "gradient_accumulation_steps": int(grad_acc),
+        "mixed_precision": HIDDEN_SETTINGS["mixed_precision"],  # bf16 only — never fp16.
+        "output_dir": actual_output_dir.resolve().as_posix(),
+        "output_name": project_name,
+        "save_every_n_steps": int(save_steps),
+        "sample_every_n_steps": int(sample_steps),
+        "sample_prompts": Path(prompt_path).resolve().as_posix(),
+        "sample_sampler": "euler",
+        "timestep_sampling": HIDDEN_SETTINGS["timestep_sampling"],
+        "discrete_flow_shift": HIDDEN_SETTINGS["discrete_flow_shift"],
+        "sigmoid_scale": HIDDEN_SETTINGS["sigmoid_scale"],
+        "weighting_scheme": HIDDEN_SETTINGS["weighting_scheme"],
+        "cache_latents": True,
+        "cache_latents_to_disk": True,
+        "cache_text_encoder_outputs": True,
+        "cache_text_encoder_outputs_to_disk": True,
+        "attn_mode": "sdpa",
+        "save_model_as": "safetensors",
+        "save_precision": "bf16",
+        "max_data_loader_n_workers": 4,
+        "vae_chunk_size": 32,
+        "vae_disable_cache": True,
+        "seed": int(train_seed),
+    }
+    if int(blocks_to_swap) > 0:
+        training_config["blocks_to_swap"] = int(blocks_to_swap)
     with open(config_path, "w", encoding="utf-8") as f: toml.dump(training_config, f)
     return str(config_path)
 
@@ -703,6 +772,75 @@ def run_auto_tagging(dataset_dir, gen_thresh, char_thresh, overwrite, current_lo
         yield "\n".join(log_lines)
 
 
+def run_prune_tags(dataset_dir, prune_tags, current_logs):
+    log_lines = current_logs.split('\n') if current_logs else []
+    path = Path(dataset_dir)
+
+    if not dataset_dir or not path.exists():
+        log_lines.append("❌ Prune Error: Dataset path invalid!")
+        yield "\n".join(log_lines)
+        return
+
+    tags = [t.strip() for t in prune_tags.split(',') if t.strip()]
+    if not tags:
+        log_lines.append("ℹ️ Prune Tags: no tags specified, nothing to do.")
+        yield "\n".join(log_lines)
+        return
+
+    txt_files = [f for f in path.glob('*.txt')]
+    if not txt_files:
+        log_lines.append("❌ Prune Error: No .txt captions found in dataset path.")
+        yield "\n".join(log_lines)
+        return
+
+    # Back up originals first (only once) so the operation is reversible.
+    backup_dir = path / "captions_backup"
+    if not backup_dir.exists():
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        for f in txt_files:
+            try:
+                shutil.copy2(str(f), str(backup_dir / f.name))
+            except Exception as e:
+                log_lines.append(f"⚠️ Backup failed for {f.name}: {e}")
+        log_lines.append(f"💾 Backed up {len(txt_files)} captions to captions_backup/")
+    else:
+        log_lines.append("ℹ️ captions_backup/ already exists — keeping the existing backup.")
+    log_lines.append(f"✂️ Pruning {len(tags)} tag(s) from {len(txt_files)} captions...")
+    yield "\n".join(log_lines)
+
+    # Whole-word, case-insensitive removal of each tag.
+    patterns = [re.compile(r'\b' + re.escape(tag) + r'\b', re.IGNORECASE) for tag in tags]
+    files_changed = 0
+    tags_removed = 0
+
+    for f in txt_files:
+        try:
+            original = f.read_text(encoding='utf-8')
+        except Exception as e:
+            log_lines.append(f"⚠️ {f.name}: {e}")
+            continue
+
+        text = original
+        for pat in patterns:
+            text, n = pat.subn('', text)
+            tags_removed += n
+
+        # Normalize: split on commas, drop empty/whitespace-only slots, rejoin.
+        # This collapses ", ," artifacts and strips leading/trailing commas/space.
+        parts = [p.strip() for p in text.split(',')]
+        new_text = ', '.join([p for p in parts if p])
+
+        if new_text != original.strip():
+            try:
+                f.write_text(new_text, encoding='utf-8')
+                files_changed += 1
+            except Exception as e:
+                log_lines.append(f"⚠️ {f.name}: {e}")
+
+    log_lines.append(f"✅ Prune complete! Files changed: {files_changed} | Tag occurrences removed: {tags_removed}")
+    yield "\n".join(log_lines)
+
+
 def open_dataset_folder_ui(dataset_dir, current_logs):
     log_lines = current_logs.split('\n') if current_logs else []
     if not dataset_dir or not os.path.exists(dataset_dir):
@@ -721,7 +859,7 @@ def open_dataset_folder_ui(dataset_dir, current_logs):
 # TRAINING FUNCTIONS
 # ==========================================
 
-def start_training(trigger_word, dataset_path, dit_p, qwen_p, vae_p, rank, lr, optimizer, t_steps, save_steps, sample_steps, pos, neg, w, h, s_steps_gen, s_cfg, s_seed, train_seed, batch_size, grad_acc):
+def start_training(trigger_word, dataset_path, dit_p, qwen_p, vae_p, rank, lr, optimizer, t_steps, save_steps, sample_steps, pos, neg, w, h, s_steps_gen, s_cfg, s_seed, train_seed, batch_size, grad_acc, blocks_to_swap=0, full_finetune=False):
     global training_process
 
     model_errors = []
@@ -804,15 +942,36 @@ def start_training(trigger_word, dataset_path, dit_p, qwen_p, vae_p, rank, lr, o
     base_res, max_bucket = analyze_dataset_resolution(dataset_path)
     log_lines.append(f"📐 Auto-Resolution Set: Base {base_res}px, Max Bucket {max_bucket}px")
 
+    # Clamp block-swap to the trainer's supported range (0..26). 0 = off.
+    try:
+        bts = int(blocks_to_swap or 0)
+    except (TypeError, ValueError):
+        bts = 0
+    if bts < 0:
+        bts = 0
+    if bts > MAX_BLOCKS_TO_SWAP:
+        log_lines.append(f"⚠️ Blocks to Swap clamped from {bts} to {MAX_BLOCKS_TO_SWAP} (max = num_blocks - 2).")
+        bts = MAX_BLOCKS_TO_SWAP
+    if bts > 0:
+        log_lines.append(f"🔀 Block swap enabled: blocks_to_swap={bts} (lower VRAM, slower steps).")
+
     models = {"dit_path": dit_p, "qwen_path": qwen_p, "vae_path": vae_p}
     prompt_path = create_sample_prompts(project_name, trigger_word, pos, neg, w, h, s_steps_gen, s_cfg, s_seed, project_configs_dir)
     dataset_toml = create_dataset_toml(project_name, dataset_path, trigger_word, base_res, max_bucket, project_configs_dir, t_steps, batch_size, grad_acc)
-    training_toml = create_training_toml(project_name, project_configs_dir, project_out_dir, rank, lr, optimizer, t_steps, save_steps, sample_steps, models, prompt_path, train_seed, batch_size, grad_acc)
+
+    if full_finetune:
+        log_lines.append("🧠 Full Fine-tune mode: training the full DiT (no LoRA). This needs far more VRAM (~31GB @512px); use Blocks to Swap on smaller cards.")
+        yield "\n".join(log_lines), gr.update()
+        training_toml = create_full_finetune_toml(project_name, project_configs_dir, project_out_dir, lr, optimizer, t_steps, save_steps, sample_steps, models, prompt_path, train_seed, batch_size, grad_acc, bts)
+        train_script = TRAIN_SCRIPT_FULL
+    else:
+        training_toml = create_training_toml(project_name, project_configs_dir, project_out_dir, rank, lr, optimizer, t_steps, save_steps, sample_steps, models, prompt_path, train_seed, batch_size, grad_acc, bts)
+        train_script = TRAIN_SCRIPT
 
     cmd = [
         str(PORTABLE_PYTHON.resolve()), "-m", "accelerate.commands.launch", "--num_processes=1", "--mixed_precision=bf16", "--dynamo_backend=no",
-        TRAIN_SCRIPT.resolve().as_posix(), 
-        "--config_file", Path(training_toml).resolve().as_posix(), 
+        train_script.resolve().as_posix(),
+        "--config_file", Path(training_toml).resolve().as_posix(),
         "--dataset_config", Path(dataset_toml).resolve().as_posix()
     ]
 
@@ -950,6 +1109,9 @@ with gr.Blocks(title="Anima TrainFlow: Easy LoRA Trainer for Anima 2B") as ui:
                     save_steps_input = gr.Number(label="Save Every n Steps", value=cs.get("save_steps", 300), precision=0)
                     sample_steps_input = gr.Number(label="Preview Every n Steps", value=cs.get("sample_steps", 300), precision=0)
                     grad_acc_input = gr.Number(label="Gradient Accumulation", value=cs.get("gradient_accumulation_steps", 1), precision=0)
+                with gr.Row():
+                    blocks_to_swap_input = gr.Slider(0, MAX_BLOCKS_TO_SWAP, value=cs.get("blocks_to_swap", 0), step=1, label="Blocks to Swap (0 = off)")
+                    full_finetune_input = gr.Checkbox(label="Full Fine-tune (no LoRA)", value=cs.get("full_finetune", False))
 
     with gr.Row():
         with gr.Column(scale=1):
@@ -971,10 +1133,16 @@ with gr.Blocks(title="Anima TrainFlow: Easy LoRA Trainer for Anima 2B") as ui:
                     tagger_gen_thresh = gr.Slider(0.0, 1.0, value=cs.get("tagger_gen_thresh", 0.35), step=0.01, label="General Tags Threshold")
                     tagger_char_thresh = gr.Slider(0.0, 1.0, value=cs.get("tagger_char_thresh", 0.85), step=0.01, label="Character Tags Threshold")
                 with gr.Row():
-                    tagger_btn = gr.Button("Create .txt captions", variant="secondary")        
-                    tagger_overwrite = gr.Checkbox(label="Overwrite existing .txt", value=cs.get("tagger_overwrite", False)) 
-                
-                
+                    tagger_btn = gr.Button("Create .txt captions", variant="secondary")
+                    tagger_overwrite = gr.Checkbox(label="Overwrite existing .txt", value=cs.get("tagger_overwrite", False))
+
+            # --- PRUNE TAGS ---
+            with gr.Group():
+                gr.Markdown("### Prune Tags")
+                prune_tags_box = gr.Textbox(label="Tags to remove (comma-separated)", value=cs.get("prune_tags", ""), placeholder="e.g., white hair, yellow eyes, undercut")
+                prune_btn = gr.Button("Strip Tags from Captions", variant="secondary")
+
+
         with gr.Column(scale=1):
             preview_gallery = gr.Gallery(label="Previews", columns=2, rows=2, height=GALLERY_HEIGHT, object_fit="contain")
             with gr.Group():
@@ -992,11 +1160,12 @@ with gr.Blocks(title="Anima TrainFlow: Easy LoRA Trainer for Anima 2B") as ui:
         rank_input, lr_input, optimizer_input, 
         steps_input, save_steps_input, sample_steps_input,
         pos_prompt, neg_prompt, width_input, height_input,
-        sample_steps_gen_input, sample_cfg_input, sample_seed_input, train_seed_val, batch_size_input, grad_acc_input
+        sample_steps_gen_input, sample_cfg_input, sample_seed_input, train_seed_val, batch_size_input, grad_acc_input,
+        blocks_to_swap_input, full_finetune_input
     ]
 
     all_settings_list = training_inputs + [
-        side_min_input, side_max_input, tagger_gen_thresh, tagger_char_thresh, tagger_overwrite
+        side_min_input, side_max_input, tagger_gen_thresh, tagger_char_thresh, tagger_overwrite, prune_tags_box
     ]
 
     def load_state_on_refresh():
@@ -1028,7 +1197,19 @@ with gr.Blocks(title="Anima TrainFlow: Easy LoRA Trainer for Anima 2B") as ui:
         inputs=[dataset_path, tagger_gen_thresh, tagger_char_thresh, tagger_overwrite, output_log],
         outputs=[output_log]
     )
-    
+
+    prune_btn.click(
+        fn=run_prune_tags,
+        inputs=[dataset_path, prune_tags_box, output_log],
+        outputs=[output_log]
+    )
+
+    # When Full Fine-tune is on, LoRA rank is inert (the full-FT trainer has no LoRA network).
+    def toggle_full_ft(is_full):
+        return gr.update(interactive=not is_full)
+    full_finetune_input.change(fn=toggle_full_ft, inputs=[full_finetune_input], outputs=[rank_input])
+
+
     start_btn.click(fn=start_training, inputs=training_inputs, outputs=[output_log, preview_gallery])
     stop_btn.click(fn=stop_training, outputs=output_log)
     folder_btn.click(fn=open_output_folder, inputs=[trigger_word], outputs=output_log)
