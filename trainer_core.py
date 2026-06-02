@@ -130,7 +130,7 @@ HIDDEN_SETTINGS = {
     "persistent_data_loader_workers": True,
     "max_grad_norm": 1.0,
     "vae_batch_size": 1,
-    "sigmoid_scale": 1.3,
+    "sigmoid_scale": 1.0,   # sd-scripts documented default; 1.3 had unknown provenance.
 }
 
 
@@ -1099,18 +1099,21 @@ def kill_process(proc: subprocess.Popen) -> str:
 # Presets only write values into existing fields — they never lock controls.
 # ==========================================
 LORA_TYPE_PRESETS = {
-    # rank, optimizer, lr (STRING — coupled to optimizer), save_every, passes_per_image, note
+    # rank, optimizer, lr (STRING — coupled to optimizer), save (fallback when no dataset),
+    # passes_per_image (EXPOSURES per image = repeats x epochs, BEFORE the effective-batch divide), note.
+    # Anima needs far more exposures than SDXL (its Qwen3 text encoder forgets hard); community
+    # sweet spot is ~480-800 exposures/img, collapse above ~800. AdamW8bit is the Anima consensus.
     "Style": dict(
-        rank=32, optimizer="Prodigy", lr="1.0", save=300, passes=130,
-        note="Style: vary subject, keep the look constant. Trigger optional. ~1.8-2.4k steps."),
+        rank=32, optimizer="AdamW8bit", lr="0.00002", save=600, passes=450,
+        note="Style: vary subject, keep the look constant. Trigger optional. Generalizes faster than identity."),
     "Character": dict(
-        rank=32, optimizer="AdamW8bit", lr="0.00002", save=250, passes=120,
+        rank=32, optimizer="AdamW8bit", lr="0.00002", save=500, passes=600,
         note="Character: prune constant identity tags so the trigger absorbs them; keep clothing/pose/bg tagged."),
     "Concept (switchable)": dict(
-        rank=32, optimizer="AdamW8bit", lr="0.00002", save=400, passes=140,
+        rank=32, optimizer="AdamW8bit", lr="0.00002", save=600, passes=550,
         note="Concept: keep the concept tag present; vary everything else. Trigger on."),
     "Concept (dominant)": dict(
-        rank=64, optimizer="AdamW8bit", lr="0.00002", save=500, passes=140,
+        rank=64, optimizer="AdamW8bit", lr="0.00002", save=600, passes=600,
         note="Dominant concept: triggerless, merge in heavy (~0.9-1.0). Needs a larger dataset (150+)."),
 }
 
@@ -1135,6 +1138,14 @@ def compute_steps(passes_per_image: int, img_count: int, batch: int, grad_acc: i
     effective_batch = max(1, int(batch) * int(grad_acc))
     raw = passes_per_image * img_count
     return max(64, round(raw / effective_batch / 64) * 64)
+
+
+def compute_save_every(total_steps: int) -> int:
+    """Derive save cadence from the computed step count, targeting ~16 checkpoints.
+    Derived (not fixed) so it stays right as dataset size / batch vary — same principle
+    as compute_steps. Anima's quality curve falls off sharply past the sweet spot, so
+    ~16 evenly-spaced saves give enough granularity to grab the earliest-good checkpoint."""
+    return max(200, round(total_steps / 16 / 50) * 50)
 
 
 def resolve_presets(lora_type: str, vram_tier: str, dataset_path: str, batch, grad_acc) -> Dict:
@@ -1195,7 +1206,11 @@ def resolve_presets(lora_type: str, vram_tier: str, dataset_path: str, batch, gr
                 g = int(grad_acc or 1)
             except (TypeError, ValueError):
                 g = 1
-            updates["training_steps"] = compute_steps(t["passes"], img_count, b, g)
+            steps = compute_steps(t["passes"], img_count, b, g)
+            save = compute_save_every(steps)
+            updates["training_steps"] = steps
+            updates["save_steps"] = save   # derived from steps (overrides the fallback)
+            info.append(f"Auto: {img_count} imgs x {t['passes']} exposures / batch {b * g} -> {steps} steps, save every {save} (~{round(steps / save)} checkpoints).")
         else:
             notes.append("Set a dataset path to auto-compute steps.")
 

@@ -47,6 +47,20 @@ note when the cap bites. `Custom` on either axis is a no-op. The dropdowns are n
 persisted (reset to Custom on reload); they only drive real fields, which persist
 normally. Resolved server-side via `POST /presets/resolve`.
 
+**Preset calibration (Anima-tuned).** The LoRA-Type numbers were re-seeded from
+SDXL-era values to Anima's reality (its Qwen3 text encoder forgets hard, so it
+needs far more exposures/image): `passes_per_image` Style 450 / Character 600 /
+Concept-switchable 550 / Concept-dominant 600 (was 130/120/140/140). All types
+default to **AdamW8bit @ 2e-5** (Anima community consensus; Prodigy stays
+selectable). `save_every` is now **derived** from the computed steps
+(`max(200, round(steps/16/50)*50)`, ~16 checkpoints) instead of a fixed per-type
+value — same compute-from-reality principle as the steps. Config defaults:
+`sigmoid_scale` 1.3 → 1.0 (sd-scripts documented default); confirmed no
+`noise_offset` / `debiased_estimation_loss` / `edm2_loss_weighting` are written;
+`weighting_scheme=logit_normal`, `discrete_flow_shift=1.0`,
+`timestep_sampling=sigmoid` unchanged. The steps formula already divides by
+effective batch, so batch raises shrink the step count as expected.
+
 **Launchers:** `start_studio.bat` runs the new server; legacy `start_trainer.bat`
 (Gradio `app.py`) is left in place. `Install_Requirements.bat` now also installs
 `fastapi` + `uvicorn` into the portable `python_embeded`.
