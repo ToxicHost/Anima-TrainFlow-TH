@@ -3,6 +3,17 @@
 This is an MIT-licensed fork of [ThetaCursed/Anima-TrainFlow](https://github.com/ThetaCursed/Anima-TrainFlow).
 The original LICENSE is preserved and attribution to ThetaCursed is retained (see `NOTICE`).
 
+## Presets removed (v2.3.0)
+
+The layered preset system (LoRA-Type × VRAM dropdowns and the auto step/save
+computation) was cut — Anima training doesn't behave in a way that lets a recipe
+be derived reliably, so the auto-populated values were misleading. **All controls
+stay; they're just manual now** (rank, steps, save, optimizer, batch, block-swap,
+full-FT — set them yourself). Removed: the two dropdowns + info line, the
+`/presets/resolve` endpoint, and `LORA_TYPE_PRESETS`/`VRAM_PRESETS`/`resolve_presets`/
+`compute_steps`/`compute_save_every` from the engine. Nothing else in the UI,
+endpoints, engine, or updater changed.
+
 ## De-Gradio rebuild → "Studio Trainer" (in progress)
 
 Replacing the single-file Gradio app with a FastAPI backend + offline custom
