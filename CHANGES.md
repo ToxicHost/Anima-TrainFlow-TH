@@ -61,6 +61,17 @@ value — same compute-from-reality principle as the steps. Config defaults:
 `timestep_sampling=sigmoid` unchanged. The steps formula already divides by
 effective batch, so batch raises shrink the step count as expected.
 
+**Manifest-driven updater.** `POST /update/apply` now reads `update_manifest.json`
+from `main` to learn the full set of app files to sync (Python + `assets/` +
+`.bat`), so new files are covered automatically as the manifest travels with each
+release (falls back to core files if the manifest is unreachable). Each path is
+validated (no traversal/absolute), a protected denylist
+(`settings.json`/`models/`/`python_embeded/`/`training/`/`assets/fonts/`) is never
+touched, every file is downloaded + validated before anything is written, and each
+target is backed up to `.bak` then atomically swapped. `VERSION` (in
+`trainer_core.py`) must be bumped on **every** distributed change — it's the only
+signal the up-to-date check uses.
+
 **Launchers:** `start_studio.bat` runs the new server; legacy `start_trainer.bat`
 (Gradio `app.py`) is left in place. `Install_Requirements.bat` now also installs
 `fastapi` + `uvicorn` into the portable `python_embeded`.

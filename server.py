@@ -264,13 +264,45 @@ def preview(path: str):
 # Touches only the known source files; never user data, models, runtime, settings.
 # ==========================================
 RAW_BASE = "https://raw.githubusercontent.com/ToxicHost/Anima-TrainFlow-TH/main/"
-UPDATE_FILES = ["trainer_core.py", "server.py"]   # assets bundle updates are out of scope for now
+MANIFEST_NAME = "update_manifest.json"
+# Used only if the manifest can't be fetched/parsed, so the updater still works.
+FALLBACK_FILES = ["trainer_core.py", "server.py"]
+# Never updated, even if a manifest somehow lists them (belt-and-suspenders).
+PROTECTED_PREFIXES = ("settings.json", "models/", "python_embeded/", "training/", "assets/fonts/")
 
 
 def _fetch(url: str, timeout: int = 20) -> bytes:
     import urllib.request
     with urllib.request.urlopen(url, timeout=timeout) as resp:
         return resp.read()
+
+
+def _is_protected(rel: str) -> bool:
+    r = rel.replace("\\", "/").lstrip("./")
+    return any(r == p.rstrip("/") or r.startswith(p) for p in PROTECTED_PREFIXES)
+
+
+def _safe_target(rel: str):
+    """Resolve a repo-relative manifest entry to a path INSIDE the app root, or None."""
+    r = rel.replace("\\", "/").strip()
+    if not r or r.startswith("/") or ".." in r.split("/") or ":" in r:
+        return None
+    target = (core.ROOT / r).resolve()
+    if not _is_within(target, core.ROOT.resolve()):
+        return None
+    return target
+
+
+def _validate_payload(rel: str, data: bytes) -> bool:
+    if not data:
+        return False
+    if rel.endswith(".py"):
+        return len(data) >= 200 and b"def " in data
+    if rel.endswith((".html", ".css", ".js")):
+        return len(data) >= 30
+    if rel.endswith(".bat"):
+        return len(data) >= 10
+    return len(data) >= 1
 
 
 @app.post("/update/check")
@@ -294,37 +326,54 @@ def update_check():
 
 @app.post("/update/apply")
 def update_apply():
-    import tempfile, os, shutil
-    # 1. Download + validate ALL files first; touch nothing on disk until every file is good.
-    staged: Dict[str, bytes] = {}
-    for name in UPDATE_FILES:
-        try:
-            data = _fetch(RAW_BASE + name)
-        except Exception as e:
-            return JSONResponse({"status": "error", "message": f"Download failed for {name}: {e}. No changes made."})
-        if len(data) < 500 or b"def " not in data:
-            return JSONResponse({"status": "error", "message": f"{name} looks invalid. No changes made."})
-        staged[name] = data
+    import tempfile, os, shutil, json as _json
 
-    # 2. Back up + atomically swap each file.
-    swapped: List[str] = []
-    for name, data in staged.items():
-        target = (core.ROOT / name).resolve()
+    # 1. Learn the current file set from the manifest on main (fallback to core files).
+    used_fallback = False
+    try:
+        manifest = _json.loads(_fetch(RAW_BASE + MANIFEST_NAME).decode("utf-8"))
+        files = manifest.get("files", [])
+        if not isinstance(files, list) or not files:
+            raise ValueError("empty manifest")
+    except Exception:
+        files = list(FALLBACK_FILES)
+        used_fallback = True
+
+    # 2. Resolve paths, download, validate — stage EVERYTHING before writing anything.
+    staged = []  # (rel, target_path, data)
+    for rel in files:
+        if not isinstance(rel, str) or _is_protected(rel):
+            continue
+        target = _safe_target(rel)
+        if target is None:
+            return JSONResponse({"status": "error", "message": f"Refused unsafe manifest path: {rel}. No changes made."})
         try:
+            data = _fetch(RAW_BASE + rel.replace("\\", "/"))
+        except Exception as e:
+            return JSONResponse({"status": "error", "message": f"Download failed for {rel}: {e}. No changes made."})
+        if not _validate_payload(rel, data):
+            return JSONResponse({"status": "error", "message": f"{rel} looks invalid. No changes made."})
+        staged.append((rel, target, data))
+
+    # 3. Back up + atomically swap each file (only now that every download is good).
+    swapped: List[str] = []
+    for rel, target, data in staged:
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
             if target.exists():
-                backup = target.with_suffix(target.suffix + ".bak")
-                shutil.copy2(str(target), str(backup))
-            fd, tmp = tempfile.mkstemp(suffix=".py", dir=str(target.parent))
+                shutil.copy2(str(target), str(target.with_suffix(target.suffix + ".bak")))
+            fd, tmp = tempfile.mkstemp(suffix=".tmp", dir=str(target.parent))
             with os.fdopen(fd, "wb") as f:
                 f.write(data)
             os.replace(tmp, str(target))
-            swapped.append(name)
+            swapped.append(rel)
         except Exception as e:
-            return JSONResponse({"status": "error", "message": f"Failed writing {name}: {e}. Updated so far: {swapped}."})
+            return JSONResponse({"status": "error", "message": f"Failed writing {rel}: {e}. Updated so far: {swapped}."})
 
+    note = " (manifest unavailable — core files only)" if used_fallback else ""
     return JSONResponse({
         "status": "ok",
-        "message": f"Updated {', '.join(swapped)}. Restart Studio Trainer to apply (backups saved as *.bak).",
+        "message": f"Updated {len(swapped)} file(s){note}: {', '.join(swapped)}. Restart Studio Trainer to apply (backups saved as *.bak).",
     })
 
 
